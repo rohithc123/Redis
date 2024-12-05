@@ -7,7 +7,7 @@ const Redis = require("redis");
 // const redisClient = Redis.createClient({url:});
 
 const redisClient = Redis.createClient();
-redisClient.connect().catch(console.error);
+redisClient.connect().catch(console.log);
 const DEFAULT_EXPIRATION = 3600;
 
 const app = express();
@@ -16,13 +16,35 @@ app.use(express.urlencoded({ extended: true }));
 
 app.get("/photos", async (req, res) => {
   const albumId = req.query.albumId;
-  const { data } = await axios.get(
-    `https://jsonplaceholder.typicode.com/photos`,
-    { params: { albumId } }
-  );
+  console.log(albumId);
 
-  redisClient.set("photos", JSON.stringify(data), "EX", DEFAULT_EXPIRATION);
-  res.json(data);
+  //without redis the fetching time was around 800ms
+  //after using redis cache it was reduced to mere 20ms
+  try {
+    const photos = await redisClient.get(`photos?albumId=${albumId}`);
+    console.log("Checking Redis cache for photos");
+
+    if (photos != null) {
+      console.log("Cache hit");
+      return res.json(JSON.parse(photos));
+    } else {
+      console.log("Cache miss");
+      const { data } = await axios.get(
+        `https://jsonplaceholder.typicode.com/photos`,
+        { params: { albumId } }
+      );
+
+      await redisClient.setEx(
+        `photos?albumId=${albumId}`,
+        DEFAULT_EXPIRATION,
+        JSON.stringify(data)
+      );
+      res.json(data);
+    }
+  } catch (error) {
+    console.error(error);
+    res.status(500).send("Internal Server Error");
+  }
 });
 
 app.get("/photos/:id", async (req, res) => {
